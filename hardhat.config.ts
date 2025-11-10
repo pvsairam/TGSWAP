@@ -26,10 +26,11 @@ const config: HardhatUserConfig = {
       url: "http://127.0.0.1:8545",
       chainId: 31337,
     },
+    // Zama fhEVM on Sepolia Testnet
     zama: {
-      url: process.env.ZAMA_RPC_URL || "https://devnet.zama.ai",
+      url: process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 8009,
+      chainId: 11155111, // Sepolia chain ID
       gasPrice: "auto",
     },
     sepolia: {
