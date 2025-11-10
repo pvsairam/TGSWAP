@@ -108,9 +108,9 @@ export function calculateMinAmount(amount: bigint, slippageTolerance: number = 0
 export function getTokenInfo(symbolOrAddress: string) {
   // Check if it's an address
   if (symbolOrAddress.startsWith('0x')) {
-    for (const [symbol, token] of Object.entries(CONTRACTS.tokens)) {
+    for (const [, token] of Object.entries(CONTRACTS.tokens)) {
       if (token.address.toLowerCase() === symbolOrAddress.toLowerCase()) {
-        return { symbol, ...token };
+        return token;
       }
     }
     return null;
@@ -118,15 +118,12 @@ export function getTokenInfo(symbolOrAddress: string) {
 
   // Otherwise treat as symbol
   const token = CONTRACTS.tokens[symbolOrAddress as keyof typeof CONTRACTS.tokens];
-  return token ? { symbol: symbolOrAddress, ...token } : null;
+  return token || null;
 }
 
 // Get all available tokens
 export function getAllTokens() {
-  return Object.entries(CONTRACTS.tokens).map(([symbol, token]) => ({
-    symbol,
-    ...token,
-  }));
+  return Object.values(CONTRACTS.tokens);
 }
 
 // Check if transaction was successful

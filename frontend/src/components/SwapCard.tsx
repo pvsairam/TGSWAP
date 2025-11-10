@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { useTelegram } from '../hooks/useTelegram';
+
+// Extend Window interface for ethereum
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
 import {
   getTokenContract,
   getRouterContract,

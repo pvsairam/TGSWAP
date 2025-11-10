@@ -37,7 +37,6 @@ export const useTelegram = () => {
       console.log('Telegram WebApp initialized:', {
         user: webapp.initDataUnsafe.user,
         colorScheme: webapp.colorScheme,
-        platform: webapp.platform,
       });
     } else {
       console.warn('Telegram WebApp not available. Running in browser mode.');

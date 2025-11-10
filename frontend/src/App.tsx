@@ -1,9 +1,9 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { SwapCard } from './components/SwapCard';
 import { useTelegram } from './hooks/useTelegram';
 
 function App() {
-  const { tg, user, isReady, colorScheme } = useTelegram();
+  const { user, isReady, colorScheme } = useTelegram();
 
   useEffect(() => {
     // Apply Telegram theme
