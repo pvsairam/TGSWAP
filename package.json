@@ -1,0 +1,48 @@
+{
+  "name": "zama-swap-telegram",
+  "version": "1.0.0",
+  "description": "Confidential token swap application using Zama's fhEVM deployed as a Telegram Mini App",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:mocked": "FHEVM_MOCKED=true hardhat test",
+    "deploy:local": "hardhat run scripts/deploy-all.ts --network localhost",
+    "deploy:zama": "hardhat run scripts/deploy-all.ts --network zama",
+    "node": "hardhat node",
+    "clean": "hardhat clean"
+  },
+  "keywords": [
+    "fhEVM",
+    "Zama",
+    "Telegram",
+    "DeFi",
+    "Privacy",
+    "FHE",
+    "DEX"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "@typechain/ethers-v6": "^0.5.0",
+    "@typechain/hardhat": "^9.0.0",
+    "@types/chai": "^4.3.0",
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "chai": "^4.3.7",
+    "ethers": "^6.13.0",
+    "hardhat": "^2.22.0",
+    "hardhat-gas-reporter": "^1.0.9",
+    "solidity-coverage": "^0.8.5",
+    "ts-node": "^10.9.1",
+    "typechain": "^8.3.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2",
+    "fhevm": "^0.5.0",
+    "fhevm-core-contracts": "^0.5.0"
+  }
+}
