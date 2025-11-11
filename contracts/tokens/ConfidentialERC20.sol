@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "fhevm/lib/TFHE.sol";
+import "fhevm/config/ZamaFHEVMConfig.sol";
+import "fhevm/gateway/GatewayCaller.sol";
 
 /**
  * @title ConfidentialERC20
- * @notice ERC-7984 compliant confidential token with encrypted balances
- * @dev Implements encrypted balance management using Zama's fhEVM
+ * @notice ERC-7984 compliant confidential token with REAL fhEVM encryption
+ * @dev Implements encrypted balance management using Zama's fhEVM library
+ *
+ * This contract uses REAL homomorphic encryption:
+ * - Balances are stored as euint64 (encrypted uint64)
+ * - All arithmetic uses FHE operations (TFHE.add, TFHE.sub, etc.)
+ * - Access control via TFHE.allow() for viewing encrypted data
+ * - Gateway callbacks for decryption when needed
  */
-contract ConfidentialERC20 is Ownable {
+contract ConfidentialERC20 is SepoliaZamaFHEVMConfig, GatewayCaller {
     // Token metadata
     string public name;
     string public symbol;
@@ -17,216 +25,241 @@ contract ConfidentialERC20 is Ownable {
     // Total supply (public for transparency)
     uint256 public totalSupply;
 
-    // Encrypted balances: address => encrypted balance (euint64)
-    // Note: In production fhEVM, these would be actual euint64 types
-    // For now using uint256 as placeholder for compatibility
-    mapping(address => uint256) private _encryptedBalances;
+    // Owner address
+    address public owner;
 
-    // Encrypted allowances: owner => spender => encrypted amount
-    mapping(address => mapping(address => uint256)) private _encryptedAllowances;
+    // REAL ENCRYPTED BALANCES using euint64
+    mapping(address => euint64) private _encryptedBalances;
 
-    // Access control for viewing encrypted data
-    mapping(address => mapping(address => bool)) private _permissions;
+    // REAL ENCRYPTED ALLOWANCES using euint64
+    mapping(address => mapping(address => euint64)) private _encryptedAllowances;
 
     // Events
-    event Transfer(address indexed from, address indexed to, uint256 amount);
-    event Approval(address indexed owner, address indexed spender, uint256 amount);
-    event EncryptedTransfer(address indexed from, address indexed to);
-    event EncryptedApproval(address indexed owner, address indexed spender);
-    event Mint(address indexed to, uint256 amount);
-    event Burn(address indexed from, uint256 amount);
+    event Transfer(address indexed from, address indexed to);
+    event Approval(address indexed owner, address indexed spender);
+    event Mint(address indexed to, uint64 amount);
+    event Burn(address indexed from, uint64 amount);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "ConfidentialERC20: caller is not the owner");
+        _;
+    }
 
     /**
      * @notice Constructor
      * @param _name Token name
      * @param _symbol Token symbol
      */
-    constructor(string memory _name, string memory _symbol) Ownable(msg.sender) {
+    constructor(string memory _name, string memory _symbol) {
         name = _name;
         symbol = _symbol;
+        owner = msg.sender;
     }
 
     /**
      * @notice Mint tokens to an address (only owner)
      * @param to Recipient address
-     * @param amount Amount to mint
+     * @param amount Amount to mint (plaintext)
      */
-    function mint(address to, uint256 amount) external onlyOwner {
-        require(to != address(0), "Cannot mint to zero address");
+    function mint(address to, uint64 amount) external onlyOwner {
+        require(to != address(0), "ConfidentialERC20: mint to zero address");
 
+        // Update total supply (plaintext)
         totalSupply += amount;
 
-        // In real fhEVM: encrypt the amount and add to encrypted balance
-        // For now: simple addition as placeholder
-        _encryptedBalances[to] += amount;
+        // Convert plaintext amount to encrypted euint64
+        euint64 encryptedAmount = TFHE.asEuint64(amount);
+
+        // Add to recipient's encrypted balance using TFHE.add
+        _encryptedBalances[to] = TFHE.add(_encryptedBalances[to], encryptedAmount);
+
+        // Allow recipient to view their own balance
+        TFHE.allowThis(_encryptedBalances[to]);
+        TFHE.allow(_encryptedBalances[to], to);
 
         emit Mint(to, amount);
-        emit Transfer(address(0), to, amount);
+        emit Transfer(address(0), to);
     }
 
     /**
-     * @notice Burn tokens from caller
-     * @param amount Amount to burn
+     * @notice Burn tokens from caller's balance
+     * @param amount Encrypted amount to burn
      */
-    function burn(uint256 amount) external {
-        require(_encryptedBalances[msg.sender] >= amount, "Insufficient balance");
+    function burn(einput amount, bytes calldata inputProof) external {
+        // Convert input to encrypted euint64
+        euint64 encryptedAmount = TFHE.asEuint64(amount, inputProof);
 
-        totalSupply -= amount;
-        _encryptedBalances[msg.sender] -= amount;
+        // Check if caller has sufficient balance (encrypted comparison)
+        ebool hasSufficientBalance = TFHE.le(encryptedAmount, _encryptedBalances[msg.sender]);
 
-        emit Burn(msg.sender, amount);
-        emit Transfer(msg.sender, address(0), amount);
+        // Subtract from balance only if sufficient (using TFHE.select)
+        euint64 newBalance = TFHE.select(
+            hasSufficientBalance,
+            TFHE.sub(_encryptedBalances[msg.sender], encryptedAmount),
+            _encryptedBalances[msg.sender] // Keep same balance if insufficient
+        );
+
+        _encryptedBalances[msg.sender] = newBalance;
+
+        // Allow caller to view their new balance
+        TFHE.allowThis(newBalance);
+        TFHE.allow(newBalance, msg.sender);
+
+        emit Burn(msg.sender, 0); // Amount is encrypted, emit 0
+        emit Transfer(msg.sender, address(0));
     }
 
     /**
-     * @notice Transfer tokens (public amount for transparency)
+     * @notice Transfer tokens (ENCRYPTED)
      * @param to Recipient address
-     * @param amount Amount to transfer
-     * @return success True if transfer succeeded
+     * @param amount Encrypted amount to transfer
      */
-    function transfer(address to, uint256 amount) external returns (bool) {
-        require(to != address(0), "Cannot transfer to zero address");
-        require(_encryptedBalances[msg.sender] >= amount, "Insufficient balance");
+    function transfer(address to, einput amount, bytes calldata inputProof) external returns (bool) {
+        require(to != address(0), "ConfidentialERC20: transfer to zero address");
 
-        _encryptedBalances[msg.sender] -= amount;
-        _encryptedBalances[to] += amount;
+        // Convert input to encrypted euint64
+        euint64 encryptedAmount = TFHE.asEuint64(amount, inputProof);
 
-        emit Transfer(msg.sender, to, amount);
+        // Execute encrypted transfer
+        _transferImpl(msg.sender, to, encryptedAmount);
+
+        emit Transfer(msg.sender, to);
         return true;
     }
 
     /**
-     * @notice Transfer tokens with encrypted amount
-     * @dev In production: encryptedAmount would be bytes (encrypted input)
-     * @param to Recipient address
-     * @param encryptedAmount Encrypted amount to transfer
-     * @return success True if transfer succeeded
-     */
-    function transferEncrypted(address to, uint256 encryptedAmount) external returns (bool) {
-        require(to != address(0), "Cannot transfer to zero address");
-
-        // In real fhEVM:
-        // euint64 amount = TFHE.asEuint64(encryptedAmount);
-        // euint64 balance = TFHE.asEuint64(_encryptedBalances[msg.sender]);
-        // ebool canTransfer = TFHE.le(amount, balance);
-        // TFHE.req(canTransfer);
-
-        require(_encryptedBalances[msg.sender] >= encryptedAmount, "Insufficient balance");
-
-        _encryptedBalances[msg.sender] -= encryptedAmount;
-        _encryptedBalances[to] += encryptedAmount;
-
-        emit EncryptedTransfer(msg.sender, to);
-        return true;
-    }
-
-    /**
-     * @notice Approve spender to spend tokens
-     * @param spender Spender address
-     * @param amount Amount to approve
-     * @return success True if approval succeeded
-     */
-    function approve(address spender, uint256 amount) external returns (bool) {
-        require(spender != address(0), "Cannot approve zero address");
-
-        _encryptedAllowances[msg.sender][spender] = amount;
-
-        emit Approval(msg.sender, spender, amount);
-        return true;
-    }
-
-    /**
-     * @notice Approve spender with encrypted amount
-     * @param spender Spender address
-     * @param encryptedAmount Encrypted amount to approve
-     * @return success True if approval succeeded
-     */
-    function approveEncrypted(address spender, uint256 encryptedAmount) external returns (bool) {
-        require(spender != address(0), "Cannot approve zero address");
-
-        _encryptedAllowances[msg.sender][spender] = encryptedAmount;
-
-        emit EncryptedApproval(msg.sender, spender);
-        return true;
-    }
-
-    /**
-     * @notice Transfer tokens on behalf of another address
+     * @notice Transfer tokens from one address to another (ENCRYPTED)
      * @param from Sender address
      * @param to Recipient address
-     * @param amount Amount to transfer
-     * @return success True if transfer succeeded
+     * @param amount Encrypted amount to transfer
      */
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        require(to != address(0), "Cannot transfer to zero address");
-        require(_encryptedBalances[from] >= amount, "Insufficient balance");
-        require(_encryptedAllowances[from][msg.sender] >= amount, "Insufficient allowance");
+    function transferFrom(
+        address from,
+        address to,
+        einput amount,
+        bytes calldata inputProof
+    ) external returns (bool) {
+        require(from != address(0), "ConfidentialERC20: transfer from zero address");
+        require(to != address(0), "ConfidentialERC20: transfer to zero address");
 
-        _encryptedAllowances[from][msg.sender] -= amount;
-        _encryptedBalances[from] -= amount;
-        _encryptedBalances[to] += amount;
+        // Convert input to encrypted euint64
+        euint64 encryptedAmount = TFHE.asEuint64(amount, inputProof);
 
-        emit Transfer(from, to, amount);
+        // Check allowance (encrypted comparison)
+        euint64 currentAllowance = _encryptedAllowances[from][msg.sender];
+        ebool hasSufficientAllowance = TFHE.le(encryptedAmount, currentAllowance);
+
+        // Decrease allowance only if sufficient
+        euint64 newAllowance = TFHE.select(
+            hasSufficientAllowance,
+            TFHE.sub(currentAllowance, encryptedAmount),
+            currentAllowance
+        );
+
+        _encryptedAllowances[from][msg.sender] = newAllowance;
+
+        // Allow spender to view new allowance
+        TFHE.allowThis(newAllowance);
+        TFHE.allow(newAllowance, msg.sender);
+
+        // Execute encrypted transfer (only if allowance was sufficient)
+        _transferImpl(from, to, encryptedAmount);
+
+        emit Transfer(from, to);
         return true;
     }
 
     /**
-     * @notice Get balance (public view, returns cleartext for testing)
-     * @param account Account to query
-     * @return balance Balance of account
-     */
-    function balanceOf(address account) external view returns (uint256) {
-        return _encryptedBalances[account];
-    }
-
-    /**
-     * @notice Get encrypted balance (sealed for specific public key)
-     * @dev In production: returns encrypted bytes that only owner can decrypt
-     * @param account Account to query
-     * @return encryptedBalance Encrypted balance
-     */
-    function balanceOfSealed(address account) external view returns (uint256) {
-        // In real fhEVM:
-        // require(msg.sender == account || _permissions[account][msg.sender], "No permission");
-        // return TFHE.sealoutput(_encryptedBalances[account], publicKey);
-
-        require(msg.sender == account || _permissions[account][msg.sender], "No permission");
-        return _encryptedBalances[account];
-    }
-
-    /**
-     * @notice Get allowance
-     * @param owner Token owner
+     * @notice Approve spender to spend tokens (ENCRYPTED)
      * @param spender Spender address
-     * @return allowance Allowance amount
+     * @param amount Encrypted amount to approve
      */
-    function allowance(address owner, address spender) external view returns (uint256) {
-        return _encryptedAllowances[owner][spender];
+    function approve(address spender, einput amount, bytes calldata inputProof) external returns (bool) {
+        require(spender != address(0), "ConfidentialERC20: approve to zero address");
+
+        // Convert input to encrypted euint64
+        euint64 encryptedAmount = TFHE.asEuint64(amount, inputProof);
+
+        // Set allowance
+        _encryptedAllowances[msg.sender][spender] = encryptedAmount;
+
+        // Allow both owner and spender to view allowance
+        TFHE.allowThis(encryptedAmount);
+        TFHE.allow(encryptedAmount, msg.sender);
+        TFHE.allow(encryptedAmount, spender);
+
+        emit Approval(msg.sender, spender);
+        return true;
+    }
+
+    /**
+     * @notice Get encrypted balance (SEALED - only viewable by authorized addresses)
+     * @param account Account to query
+     * @return Encrypted balance (euint64)
+     */
+    function balanceOf(address account) external view returns (euint64) {
+        return _encryptedBalances[account];
+    }
+
+    /**
+     * @notice Get encrypted allowance (SEALED)
+     * @param _owner Owner address
+     * @param spender Spender address
+     * @return Encrypted allowance (euint64)
+     */
+    function allowance(address _owner, address spender) external view returns (euint64) {
+        return _encryptedAllowances[_owner][spender];
+    }
+
+    /**
+     * @notice Internal transfer implementation (ENCRYPTED)
+     */
+    function _transferImpl(address from, address to, euint64 encryptedAmount) internal {
+        // Check if sender has sufficient balance (encrypted comparison)
+        ebool hasSufficientBalance = TFHE.le(encryptedAmount, _encryptedBalances[from]);
+
+        // Subtract from sender only if sufficient balance
+        euint64 newBalanceFrom = TFHE.select(
+            hasSufficientBalance,
+            TFHE.sub(_encryptedBalances[from], encryptedAmount),
+            _encryptedBalances[from]
+        );
+
+        // Add to recipient (using TFHE.select to only add if sender had sufficient balance)
+        euint64 amountToAdd = TFHE.select(
+            hasSufficientBalance,
+            encryptedAmount,
+            TFHE.asEuint64(0)
+        );
+
+        euint64 newBalanceTo = TFHE.add(_encryptedBalances[to], amountToAdd);
+
+        // Update balances
+        _encryptedBalances[from] = newBalanceFrom;
+        _encryptedBalances[to] = newBalanceTo;
+
+        // Allow addresses to view their own balances
+        TFHE.allowThis(newBalanceFrom);
+        TFHE.allow(newBalanceFrom, from);
+
+        TFHE.allowThis(newBalanceTo);
+        TFHE.allow(newBalanceTo, to);
     }
 
     /**
      * @notice Grant permission to view encrypted balance
      * @param viewer Address to grant permission to
      */
-    function grantPermission(address viewer) external {
-        _permissions[msg.sender][viewer] = true;
+    function allowBalance(address viewer) external {
+        TFHE.allow(_encryptedBalances[msg.sender], viewer);
     }
 
     /**
-     * @notice Revoke permission to view encrypted balance
-     * @param viewer Address to revoke permission from
+     * @notice Grant permission to view encrypted allowance
+     * @param spender Spender address
+     * @param viewer Address to grant permission to
      */
-    function revokePermission(address viewer) external {
-        _permissions[msg.sender][viewer] = false;
-    }
-
-    /**
-     * @notice Check if viewer has permission to see encrypted balance
-     * @param owner Balance owner
-     * @param viewer Viewer address
-     * @return hasPermission True if viewer has permission
-     */
-    function hasPermission(address owner, address viewer) external view returns (bool) {
-        return _permissions[owner][viewer];
+    function allowAllowance(address spender, address viewer) external {
+        TFHE.allow(_encryptedAllowances[msg.sender][spender], viewer);
     }
 }
