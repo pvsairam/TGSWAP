@@ -58,9 +58,6 @@ contract ZamaSwapFactory is IZamaSwapFactory {
         getPair[token1][token0] = pair;
         allPairs.push(pair);
 
-        // Authorize router and factory to view reserves
-        ZamaSwapPair(pair).authorizeViewer(address(this));
-
         emit PairCreated(token0, token1, pair, allPairs.length);
     }
 
