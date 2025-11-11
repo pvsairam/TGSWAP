@@ -279,10 +279,8 @@ contract ZamaSwapRouter is IZamaSwapRouter, ReentrancyGuard {
 
         require(pair != address(0), "ZamaSwapRouter: PAIR_NOT_FOUND");
 
-        // Authorize router to view reserves
-        ZamaSwapPair pairContract = ZamaSwapPair(pair);
-
-        (uint256 reserve0, uint256 reserve1,) = pairContract.getReserves();
+        // Get reserves from pair
+        (uint256 reserve0, uint256 reserve1,) = IZamaSwapPair(pair).getReserves();
         (reserveA, reserveB) = tokenA == token0 ? (reserve0, reserve1) : (reserve1, reserve0);
     }
 
